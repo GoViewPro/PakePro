@@ -1,39 +1,56 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-output
-*.msi
-*.deb
-*.AppImage
-*.dmg
-*.app
-
-dist
+!dist/.gitkeep
 !dist/about_pake.html
 !dist/cli.js
-!dist/.gitkeep
-src-tauri/.cargo/config.toml
-src-tauri/.cargo/
+.DS_Store
+.idea
 .next
+.vscode
+*.app
+*.AppImage
+*.deb
+*.desktop
+*.dmg
+*.local
+*.log
+*.msi
+*.njsproj
+*.ntvs*
+*.sln
+*.suo
+*.sw?
+*.tmp
+# Local AI assistant overrides (shared docs AGENTS.md / CLAUDE.md / .claude are tracked)
+CLAUDE.local.md
+AGENTS.override.md
+.claude/settings.local.json
+.agents/settings.local.json
+# Editor directories and files
+# Logs
+AGENT.md
+dist
+dist-ssr
+journal/
+lerna-debug.log*
+logs
+node_modules
+npm-debug.log*
+output
+pnpm-debug.log*
+src-tauri/.cargo/
+src-tauri/.cargo/config.toml
 src-tauri/.pake/
 src-tauri/gen
-*.tmp
+yarn-debug.log*
+yarn-error.log*
+
+# Generated code review graph files
+code-review-graph.mmd
+code-review-graph.json
+
+# Local test artifacts
+test-local.html
+src-tauri/icons/testapp.icns
+src-tauri/icons/localapp.icns
+src-tauri/icons/urltest.icns
+src-tauri/icons/githubmultiarch.icns

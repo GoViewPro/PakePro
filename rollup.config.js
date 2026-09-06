@@ -49,14 +49,13 @@ export default {
       tsconfig: "./tsconfig.json",
       sourceMap: !isProduction,
       inlineSources: !isProduction,
-      noEmitOnError: false,
+      noEmitOnError: isProduction,
       compilerOptions: {
         target: "es2020",
         module: "esnext",
         moduleResolution: "node",
         esModuleInterop: true,
         allowSyntheticDefaultImports: true,
-        strict: false,
       },
     }),
     json(),
@@ -78,7 +77,6 @@ function pakeCliDevPlugin() {
 
   let devHasStarted = false;
 
-  // 智能检测包管理器
   const detectPackageManager = () => {
     if (fs.existsSync("pnpm-lock.yaml")) return "pnpm";
     if (fs.existsSync("yarn.lock")) return "yarn";
@@ -89,7 +87,14 @@ function pakeCliDevPlugin() {
     name: "pake-cli-dev-plugin",
     buildEnd() {
       const command = "node";
-      const cliCmdArgs = ["./dist/dev.js"];
+      // Pass through arguments, ignoring the first 2 (node rollup) and filtering out rollup-specifics
+      // We need to keep only arguments meant for our CLI script
+      const args = process.argv.slice(2).filter((arg) => {
+        // Filter out typical rollup flags if they are mixed in
+        // This is a simplistic filter, might need adjustment based on how npm script invokes rollup
+        return !["-c", "-w", "--config", "--watch"].includes(arg);
+      });
+      const cliCmdArgs = ["./dist/dev.js", ...args];
 
       cliChildProcess = spawn(command, cliCmdArgs, { detached: true });
 
@@ -107,7 +112,7 @@ function pakeCliDevPlugin() {
         devHasStarted = true;
 
         const packageManager = detectPackageManager();
-        const command = `${packageManager} run tauri dev -- --config ./src-tauri/.pake/tauri.conf.json --features cli-build`;
+        const command = `${packageManager} run tauri dev --config ./src-tauri/.pake/tauri.conf.json -- --features cli-build`;
 
         devChildProcess = exec(command);
 

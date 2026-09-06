@@ -83,7 +83,7 @@ Send messages between web content and Pake container.
 **Web Side (JavaScript):**
 
 ```javascript
-window.__TAURI__.invoke("handle_scroll", {
+window.__TAURI__.core.invoke("handle_scroll", {
   scrollY: window.scrollY,
   scrollX: window.scrollX,
 });
@@ -104,25 +104,67 @@ Configure window properties in `pake.json`:
 
 ```json
 {
-  "windows": {
-    "width": 1200,
-    "height": 780,
-    "fullscreen": false,
-    "resizable": true
-  },
-  "hideTitleBar": true
+  "windows": [
+    {
+      "width": 1200,
+      "height": 780,
+      "fullscreen": false,
+      "resizable": true,
+      "hide_title_bar": true
+    }
+  ]
 }
 ```
+
+`hide_title_bar` is the `pake.json` key (the CLI exposes it as `--hide-title-bar`). It is only supported on macOS and is ignored on Windows and Linux. Use `hide_window_decorations` (`--hide-window-decorations`) for frameless windows on Windows and Linux.
 
 ## Static File Packaging
 
 Package local HTML/CSS/JS files:
 
 ```bash
+# A whole directory of static files (must contain index.html at its root),
+# e.g. the dist/ output of a web build. The full tree is packaged.
+pake ./dist --name my-tool
+
+# A single HTML file; add --use-local-file to also copy its sibling files
 pake ./my-app/index.html --name my-static-app --use-local-file
 ```
 
-Requirements: Pake CLI >= 3.0.0
+Hash-based routing works out of the box; history-mode SPA routing is not yet supported for local packaging. Single-file packaging requires Pake CLI >= 3.0.0; directory packaging requires >= 3.15.0.
+
+## macOS Media Permissions
+
+By default, apps built with Pake do not request camera or microphone access. For sites that require these (for example, video conferencing or voice input), pass the relevant flags at build time:
+
+```bash
+pake https://chatgpt.com --name ChatGPT --microphone
+pake https://meet.google.com --name GoogleMeet --camera --microphone
+```
+
+- `--microphone`: grants microphone access (`com.apple.security.device.audio-input`)
+- `--camera`: grants camera access (`com.apple.security.device.camera`)
+
+macOS will prompt the user for permission on first use. Only add these flags for sites that actually need them.
+
+## Multiple Apps For The Same Site
+
+If you need separate apps for the same site, for example two Gmail accounts with different login state, build them with different app names:
+
+```bash
+pake https://gmail.com --name "Gmail Work"
+pake https://gmail.com --name "Gmail Personal"
+```
+
+Pake now generates a different app identifier for each `URL + name` pair, so these apps can be installed as separate desktop apps instead of resolving to the same app.
+
+For advanced cases, Pake also supports a hidden `--identifier` option if you need to pin the bundle identifier explicitly:
+
+```bash
+pake https://gmail.com --name "Gmail Work" --identifier com.example.gmail.work
+```
+
+`--multi-instance` is different. It only allows multiple processes for the same packaged app, it does not create separate app identities.
 
 ## Project Structure
 
@@ -158,8 +200,8 @@ Understanding Pake's codebase structure will help you navigate and contribute ef
 
 ### Prerequisites
 
-- Node.js ≥22.0.0 (recommended LTS, older versions ≥18.0.0 may work)
-- Rust ≥1.89.0 (recommended stable, older versions ≥1.78.0 may work)
+- Node.js ≥22.0.0 (recommended LTS, older versions ≥20.0.0 may work)
+- Rust ≥1.85.0 (recommended stable)
 
 #### Platform-Specific Requirements
 
@@ -169,7 +211,7 @@ Understanding Pake's codebase structure will help you navigate and contribute ef
 
 **Windows:**
 
-- **CRITICAL**: Consult [Tauri prerequisites](https://tauri.app/start/prerequisites/) before proceeding
+- **CRITICAL**: Consult [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) before proceeding
 - Windows 10 SDK (10.0.19041.0) and Visual Studio Build Tools 2022 (≥17.2)
 - Required redistributables:
   1. Microsoft Visual C++ 2015-2022 Redistributable (x64)
@@ -232,17 +274,7 @@ pnpm run dev
 
 #### CLI Development
 
-For CLI development with hot reloading, modify the `DEFAULT_DEV_PAKE_OPTIONS` configuration in `bin/defaults.ts`:
-
-```typescript
-export const DEFAULT_DEV_PAKE_OPTIONS: PakeCliOptions & { url: string } = {
-  ...DEFAULT_PAKE_OPTIONS,
-  url: "https://weekly.tw93.fun/",
-  name: "Weekly",
-};
-```
-
-Then run:
+For CLI development with hot reloading, run:
 
 ```bash
 pnpm run cli:dev
@@ -252,78 +284,51 @@ This script reads the configuration and packages the specified app in watch mode
 
 ### Testing Guide
 
-Comprehensive CLI build test suite for validating multi-platform packaging functionality.
+Comprehensive CLI build and release validation guidance for multi-platform packaging.
 
 #### Running Tests
 
 ```bash
 # Complete test suite (recommended)
-pnpm test                   # Run full test suite including real build tests (8-12 minutes)
+pnpm test                   # Build the CLI, run the Vitest suite, then run real build + release workflow smoke tests
 
-# Quick testing during development
-pnpm test -- --no-build     # Skip build tests, validate core functionality only (30 seconds)
+# Skip the real build and release workflow smoke tests
+pnpm test -- --no-build
 
-# Build CLI for testing
+# Run the fast Vitest suite only
+npx vitest run
+
+# Build the CLI explicitly
 pnpm run cli:build
+
+# Run the release workflow smoke test directly
+node ./tests/release.js
 ```
 
 #### 🚀 Complete Test Suite Includes
 
-- ✅ **Unit Tests**: CLI commands, parameter validation, response time
-- ✅ **Integration Tests**: Process management, file permissions, dependency resolution
-- ✅ **Builder Tests**: Platform detection, architecture detection, file naming
-- ✅ **Real Build Tests**: Complete GitHub.com app packaging validation
+- ✅ **Vitest suite**: unit, integration, builder, and CLI option coverage
+- ✅ **Real build smoke test**: platform-aware packaging validation
+- ✅ **Release workflow smoke test**: verifies the release build path used for popular apps
 
 #### Test Details
 
-**Unit Tests (6 tests)**
+- `pnpm test` runs the main CLI test runner in [`tests/index.js`](../tests/index.js), which:
+- builds the CLI,
+- runs the Vitest suite,
+- runs the real build smoke test unless `--no-build` is passed,
+- and then runs the release workflow smoke test when the real build phase succeeds.
 
-- Version command (`--version`)
-- Help command (`--help`)
-- URL validation (valid/invalid links)
-- Parameter validation (number type checking)
-- CLI response time (<2 seconds)
-- Weekly URL accessibility
+Useful optional flags:
 
-**Integration Tests (3 tests)**
+- `--no-unit`: skip unit tests
+- `--no-integration`: skip integration tests
+- `--no-builder`: skip builder tests
+- `--no-build`: skip the real build smoke test and the follow-up release workflow smoke test
+- `--e2e`: add end-to-end configuration tests
+- `--pake-cli`: add GitHub Actions related checks
 
-- Process spawning and management
-- File system permission checks
-- Dependency package resolution validation
-
-**Builder Tests (3 tests)**
-
-- Platform detection (macOS/Windows/Linux)
-- Architecture detection (Intel/ARM64)
-- File naming pattern verification
-
-**Real Build Tests (Focus)**
-
-_macOS_: 🔥 Multi-architecture build (Universal binary)
-
-- Compile Intel + Apple Silicon dual architecture
-- Detect `.app` file generation: `GitHubMultiArch.app`
-- Fallback detection: `src-tauri/target/universal-apple-darwin/release/bundle/macos/`
-- Verify universal binary: `file` command architecture check
-
-_Windows_: Single architecture build
-
-- Detect EXE file: `src-tauri/target/x86_64-pc-windows-msvc/release/pake.exe`
-- Detect MSI installer: `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi`
-
-_Linux_: Single architecture build
-
-- Detect DEB package: `src-tauri/target/release/bundle/deb/*.deb`
-- Detect AppImage: `src-tauri/target/release/bundle/appimage/*.AppImage`
-
-#### Release Build Testing
-
-```bash
-# Actual build testing (tests weread + twitter apps)
-node ./tests/release.js
-```
-
-Real build of 2 application packages to verify complete packaging flow and release.yml logic.
+If you only want the release workflow smoke test, run `node ./tests/release.js` directly.
 
 #### Troubleshooting
 
@@ -331,8 +336,6 @@ Real build of 2 application packages to verify complete packaging flow and relea
 - **Test timeout**: Build tests require extended time to complete
 - **Build failures**: Check Rust toolchain with `rustup update`
 - **Permission errors**: Ensure write permissions are available
-
-Total: **13 tests** - all passing indicates CLI functionality is working properly. Recommend running `pnpm test` before code commits to ensure all platforms build correctly.
 
 ### Common Build Issues
 

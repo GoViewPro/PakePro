@@ -1,5 +1,6 @@
 import { execa } from 'execa';
 import { npmDirectory } from './dir';
+import { isMachineMode } from './output';
 
 export async function shellExec(
   command: string,
@@ -11,7 +12,11 @@ export async function shellExec(
       cwd: npmDirectory,
       // Use 'inherit' to show all output directly to user in real-time.
       // This ensures linuxdeploy and other tool outputs are visible during builds.
-      stdio: 'inherit',
+      // In machine mode (--json) stdout is reserved for the final JSON result,
+      // so subprocess stdout is rerouted to stderr instead.
+      stdin: 'inherit',
+      stdout: isMachineMode() ? process.stderr : 'inherit',
+      stderr: 'inherit',
       shell: true,
       timeout,
       env: env ? { ...process.env, ...env } : process.env,
@@ -27,45 +32,11 @@ export async function shellExec(
       );
     }
 
-    let errorMsg = `Error occurred while executing command "${command}". Exit code: ${exitCode}. Details: ${errorMessage}`;
-
-    // Provide helpful guidance for common Linux AppImage build failures
-    // caused by strip tool incompatibility with modern glibc (2.38+)
-    const lowerError = errorMessage.toLowerCase();
-
-    if (
-      process.platform === 'linux' &&
-      (lowerError.includes('linuxdeploy') ||
-        lowerError.includes('appimage') ||
-        lowerError.includes('strip'))
-    ) {
-      errorMsg +=
-        '\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
-        'Linux AppImage Build Failed\n' +
-        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
-        'Cause: Strip tool incompatibility with glibc 2.38+\n' +
-        '       (affects Debian Trixie, Arch Linux, and other modern distros)\n\n' +
-        'Quick fix:\n' +
-        '  NO_STRIP=1 pake <url> --targets appimage --debug\n\n' +
-        'Alternatives:\n' +
-        '  • Use DEB format: pake <url> --targets deb\n' +
-        '  • Update binutils: sudo apt install binutils (or pacman -S binutils)\n' +
-        '  • Detailed guide: https://github.com/tw93/Pake/blob/main/docs/faq.md\n' +
-        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
-
-      if (
-        lowerError.includes('fuse') ||
-        lowerError.includes('operation not permitted') ||
-        lowerError.includes('/dev/fuse')
-      ) {
-        errorMsg +=
-          '\n\nDocker / Container hint:\n' +
-          '  AppImage tooling needs access to /dev/fuse. When running inside Docker, add:\n' +
-          '    --privileged --device /dev/fuse --security-opt apparmor=unconfined\n' +
-          '  or run on the host directly.';
-      }
-    }
-
-    throw new Error(errorMsg);
+    // AppImage/linuxdeploy guidance is added by the caller (BaseBuilder), which
+    // knows the build target. We only have the command line here (the tool's
+    // diagnostics stream to the terminal via stdio:inherit, not into the error).
+    throw new Error(
+      `Error occurred while executing command "${command}". Exit code: ${exitCode}. Details: ${errorMessage}`,
+    );
   }
 }

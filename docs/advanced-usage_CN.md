@@ -83,7 +83,7 @@ if (window.Notification && Notification.permission === "default") {
 **网页端（JavaScript）：**
 
 ```javascript
-window.__TAURI__.invoke("handle_scroll", {
+window.__TAURI__.core.invoke("handle_scroll", {
   scrollY: window.scrollY,
   scrollX: window.scrollX,
 });
@@ -104,25 +104,67 @@ fn handle_scroll(scroll_y: f64, scroll_x: f64) {
 
 ```json
 {
-  "windows": {
-    "width": 1200,
-    "height": 780,
-    "fullscreen": false,
-    "resizable": true
-  },
-  "hideTitleBar": true
+  "windows": [
+    {
+      "width": 1200,
+      "height": 780,
+      "fullscreen": false,
+      "resizable": true,
+      "hide_title_bar": true
+    }
+  ]
 }
 ```
+
+`hide_title_bar` 是 `pake.json` 中的字段名（CLI 对应参数为 `--hide-title-bar`）。仅支持 macOS，在 Windows 和 Linux 上会被忽略。Windows 和 Linux 请使用 `hide_window_decorations`（`--hide-window-decorations`）。
 
 ## 静态文件打包
 
 打包本地 HTML/CSS/JS 文件：
 
 ```bash
+# 打包整个静态文件目录（根目录必须有 index.html），
+# 例如前端构建产物 dist/，整个目录树都会被打进应用
+pake ./dist --name my-tool
+
+# 打包单个 HTML 文件；加 --use-local-file 可同时拷贝同级文件
 pake ./my-app/index.html --name my-static-app --use-local-file
 ```
 
-要求：Pake CLI >= 3.0.0
+本地打包开箱支持 hash 路由，history 模式的 SPA 路由暂不支持。单文件打包要求 Pake CLI >= 3.0.0，目录打包要求 >= 3.15.0。
+
+## macOS 摄像头与麦克风权限
+
+Pake 构建的应用默认不申请摄像头或麦克风权限。对于需要这些权限的站点（例如视频会议或语音输入），在构建时传入对应的标志：
+
+```bash
+pake https://chatgpt.com --name ChatGPT --microphone
+pake https://meet.google.com --name GoogleMeet --camera --microphone
+```
+
+- `--microphone`: 申请麦克风权限（`com.apple.security.device.audio-input`）
+- `--camera`: 申请摄像头权限（`com.apple.security.device.camera`）
+
+macOS 会在首次使用时向用户弹出权限确认对话框。请仅在确实需要的站点上添加这些标志。
+
+## 同一站点生成多个独立应用
+
+如果你需要为同一个站点生成多个彼此独立的应用，例如两个不同登录态的 Gmail，可以直接使用不同的应用名称进行构建：
+
+```bash
+pake https://gmail.com --name "Gmail Work"
+pake https://gmail.com --name "Gmail Personal"
+```
+
+Pake 现在会基于 `URL + name` 生成不同的应用标识，因此这两个应用会被当作两个独立桌面应用安装，而不是落到同一个应用上。
+
+对于需要固定 bundle identifier 的高级场景，Pake 也支持一个隐藏参数 `--identifier`：
+
+```bash
+pake https://gmail.com --name "Gmail Work" --identifier com.example.gmail.work
+```
+
+`--multi-instance` 和这个能力不同，它只是允许同一个已打包应用启动多个进程，并不会创建多个独立应用身份。
 
 ## 项目结构
 
@@ -158,8 +200,8 @@ pake ./my-app/index.html --name my-static-app --use-local-file
 
 ### 前置条件
 
-- Node.js ≥22.0.0 (推荐 LTS，较旧版本 ≥18.0.0 可能可用)
-- Rust ≥1.89.0 (推荐稳定版，较旧版本 ≥1.78.0 可能可用)
+- Node.js ≥22.0.0 (推荐 LTS，较旧版本 ≥20.0.0 可能可用)
+- Rust ≥1.85.0 (推荐稳定版)
 
 #### 平台特定要求
 
@@ -169,7 +211,7 @@ pake ./my-app/index.html --name my-static-app --use-local-file
 
 **Windows:**
 
-- **重要**：请先参阅 [Tauri 依赖项指南](https://tauri.app/start/prerequisites/)
+- **重要**：请先参阅 [Tauri 依赖项指南](https://v2.tauri.app/start/prerequisites/)
 - Windows 10 SDK (10.0.19041.0) 和 Visual Studio Build Tools 2022 (≥17.2)
 - 必需的运行库：
   1. Microsoft Visual C++ 2015-2022 Redistributable (x64)
@@ -232,17 +274,7 @@ pnpm run dev
 
 #### CLI 开发调试
 
-对于需要热重载的 CLI 开发，可修改 `bin/defaults.ts` 中的 `DEFAULT_DEV_PAKE_OPTIONS` 配置：
-
-```typescript
-export const DEFAULT_DEV_PAKE_OPTIONS: PakeCliOptions & { url: string } = {
-  ...DEFAULT_PAKE_OPTIONS,
-  url: "https://weekly.tw93.fun/",
-  name: "Weekly",
-};
-```
-
-然后运行：
+对于需要热重载的 CLI 开发，运行：
 
 ```bash
 pnpm run cli:dev
@@ -252,78 +284,51 @@ pnpm run cli:dev
 
 ### 测试指南
 
-统一的 CLI 构建测试套件，用于验证多平台打包功能。
+统一的 CLI 构建与发布验证指南，用于验证多平台打包功能。
 
 #### 运行测试
 
 ```bash
 # 完整测试套件（推荐）
-pnpm test                   # 运行完整测试套件，包含真实构建测试（8-12分钟）
+pnpm test                   # 构建 CLI，运行 Vitest 套件，再执行真实构建和发布流程 smoke test
 
-# 开发时快速测试
-pnpm test -- --no-build     # 跳过构建测试，仅验证核心功能（30秒）
+# 跳过真实构建和发布流程 smoke test
+pnpm test -- --no-build
+
+# 仅运行快速 Vitest 套件
+npx vitest run
 
 # 构建 CLI 以供测试
 pnpm run cli:build
+
+# 单独运行发布流程 smoke test
+node ./tests/release.js
 ```
 
 #### 🚀 完整测试套件包含
 
-- ✅ **单元测试**：CLI命令、参数验证、响应时间
-- ✅ **集成测试**：进程管理、文件权限、依赖解析
-- ✅ **构建器测试**：平台检测、架构检测、文件命名
-- ✅ **真实构建测试**：完整的GitHub.com应用打包验证
+- ✅ **Vitest 套件**：单元、集成、构建器和 CLI 选项覆盖
+- ✅ **真实构建 smoke test**：按平台验证实际打包流程
+- ✅ **发布流程 smoke test**：验证 popular apps 的发布构建路径
 
 #### 测试内容详情
 
-**单元测试（6个）**
+- `pnpm test` 会运行 [`tests/index.js`](../tests/index.js) 这个主测试入口，它会：
+- 先构建 CLI，
+- 再运行 Vitest 套件，
+- 如果没有传 `--no-build`，继续执行真实构建 smoke test，
+- 然后在真实构建成功后继续执行发布流程 smoke test。
 
-- 版本命令 (`--version`)
-- 帮助命令 (`--help`)
-- URL 验证（有效/无效链接）
-- 参数验证（数字类型检查）
-- CLI 响应时间（<2秒）
-- Weekly URL 可访问性
+常用可选参数：
 
-**集成测试（3个）**
+- `--no-unit`：跳过单元测试
+- `--no-integration`：跳过集成测试
+- `--no-builder`：跳过构建器测试
+- `--no-build`：跳过真实构建 smoke test 以及后续的发布流程 smoke test
+- `--e2e`：增加端到端配置测试
+- `--pake-cli`：增加 GitHub Actions 相关检查
 
-- 进程生成和管理
-- 文件系统权限检查
-- 依赖包解析验证
-
-**构建测试（3个）**
-
-- 平台检测（macOS/Windows/Linux）
-- 架构检测（Intel/ARM64）
-- 文件命名模式验证
-
-**真实构建测试（重点）**
-
-_macOS_: 🔥 多架构构建（通用二进制）
-
-- 编译 Intel + Apple Silicon 双架构
-- 检测 `.app` 文件生成：`GitHubMultiArch.app`
-- 备用检测：`src-tauri/target/universal-apple-darwin/release/bundle/macos/`
-- 验证通用二进制：`file` 命令检查架构
-
-_Windows_: 单架构构建
-
-- 检测 EXE 文件：`src-tauri/target/x86_64-pc-windows-msvc/release/pake.exe`
-- 检测 MSI 安装包：`src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi`
-
-_Linux_: 单架构构建
-
-- 检测 DEB 包：`src-tauri/target/release/bundle/deb/*.deb`
-- 检测 AppImage：`src-tauri/target/release/bundle/appimage/*.AppImage`
-
-#### 发布构建测试
-
-```bash
-# 实际构建测试（固定测试 weread + twitter 两个应用）
-node ./tests/release.js
-```
-
-真实构建2个应用包，验证完整的打包流程和 release.yml 逻辑是否正常工作。
+如果只想单独验证发布流程，可以直接运行 `node ./tests/release.js`。
 
 #### 故障排除
 
@@ -331,8 +336,6 @@ node ./tests/release.js
 - **测试超时**：构建测试需要较长时间完成
 - **构建失败**：检查 Rust 工具链 `rustup update`
 - **权限错误**：确保有写入权限
-
-总计：**13 个测试**，全部通过表示 CLI 功能正常。提交代码前建议运行 `pnpm test` 确保所有平台构建正常。
 
 ### 常见构建问题
 

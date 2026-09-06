@@ -16,6 +16,8 @@ on:
         default: false
 
 env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.2"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -31,7 +33,7 @@ jobs:
       apps_config: ${{ steps.read-apps-config.outputs.apps_config }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get Apps Config
         id: read-apps-config
@@ -39,19 +41,65 @@ jobs:
           echo "apps_name=$(jq -c '[.[] | .name]' default_app_list.json)" >> $GITHUB_OUTPUT
           echo "apps_config=$(jq -c '.' default_app_list.json)" >> $GITHUB_OUTPUT
 
-  build-popular-apps:
-    name: ${{ matrix.config.title }}
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Create release placeholder
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          skipIfReleaseExists: true
+
+  build-cli:
+    name: Build CLI
     needs: release-apps
     if: needs.release-apps.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js Environment
+        uses: ./.github/actions/setup-env
+        with:
+          mode: 'node'
+
+      - name: Build CLI
+        run: pnpm run cli:build
+
+      - name: Upload CLI Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: pake-cli-dist
+          path: dist/
+          retention-days: 1
+
+  build-popular-apps:
+    name: ${{ matrix.config.title }}
+    needs: [release-apps, build-cli, create-release]
+    if: |
+      needs.release-apps.result == 'success' &&
+      needs.build-cli.result == 'success' &&
+      (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
     strategy:
       matrix:
         config: ${{ fromJSON(needs.release-apps.outputs.apps_config) }}
     uses: ./.github/workflows/single-app.yaml
+    secrets: inherit
     with:
       name: ${{ matrix.config.name }}
       title: ${{ matrix.config.title }}
       name_zh: ${{ matrix.config.name_zh }}
       url: ${{ matrix.config.url }}
+      icon: ${{ matrix.config.icon }}
+      new_window: ${{ matrix.config.new_window || false }}
+      incognito: ${{ matrix.config.incognito || false }}
+      width: ${{ matrix.config.width || 1200 }}
+      height: ${{ matrix.config.height || 780 }}
 
   # Publish Docker image (runs in parallel with app builds)
   publish-docker:
@@ -64,7 +112,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -78,7 +126,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -87,11 +135,13 @@ jobs:
             type=sha
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          no-cache: true
           platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

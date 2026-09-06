@@ -25,6 +25,21 @@ npm run build
 # 配置 tauri.conf.json, 配置为 `devUrl:"https://ai.goviewlink.com"`
 ```
 
+## Command-Line Packaging
+
+The underlying `pake` CLI can also package any URL directly:
+
+```bash
+# Install Pake CLI
+pnpm install -g pake-cli
+
+# Basic usage - automatically fetches website icon
+pake https://github.com --name GitHub
+
+# Advanced usage with custom options
+pake https://weekly.tw93.fun --name Weekly --icon https://cdn.tw93.fun/pake/weekly.icns --width 1200 --height 800 --hide-title-bar
+```
+
 ## 项目修改
 
 1. PakePro/src-tauri/src/app/invoke.rs <br>
@@ -37,6 +52,10 @@ npm run build
   项目采用的是 tauri_plugin_localhost 插件, `http://localhost:9527` 提供的本地服务器, `tauri://` 协议会导致一些服务无法使用, 你们可以根据自己的需求修改这里的逻辑. <br>
   
 4. 如果你是打包的本地静态文件, 需要服务端推送自动更新应用, 可以参考 main-pro-updater 分支. <br>
+
+## Development
+
+Requires Rust `>=1.85` and Node `>=22` (recommended LTS; `>=20` also works). For detailed installation guide, see [Tauri documentation](https://v2.tauri.app/start/prerequisites/). If unfamiliar with development environment, use the CLI tool instead.
 
 ## ⚠️ 注意安全!
   PakePro/src-tauri/capabilities/default.json <br>
@@ -80,3 +99,7 @@ npm run build
 ## ⚠️ Caution!
   PakePro/src-tauri/capabilities/default.json <br>
   To facilitate use, the security permissions are set to the most relaxed. You can modify the logic here according to your own needs.
+
+## License
+
+PakePro is open source under GPL-3.0, based on [Pake](https://github.com/tw93/Pake), see [LICENSE](./LICENSE) and [Pake Output Exception](./LICENSE-EXCEPTION); apps you build with it are entirely yours to use and distribute.

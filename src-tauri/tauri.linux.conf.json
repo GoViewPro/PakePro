@@ -5,8 +5,7 @@
     "active": true,
     "linux": {
       "deb": {
-        "depends": ["curl", "wget"],
-        "files": { "/usr/share/applications/com-pake-GoviewPro.desktop": "assets/com-pake-GoviewPro.desktop" }
+        "depends": ["curl", "wget"]
       }
     },
     "targets": ["deb", "appimage"]

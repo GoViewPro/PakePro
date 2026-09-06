@@ -4,25 +4,14 @@
 
 ## Branch Management
 
-```mermaid
-graph LR
-    b_dev(dev) --> b_main(main);
-    contributions([Develop / Pull requests]) -.-> b_dev;
-```
-
-- `dev` branch
-  - `dev` is the developing branch.
-  - It's **RECOMMENDED** to commit feature PR to `dev`.
-- `main` branch
-  - `main` is the release branch, we will make tag and publish version on this branch.
-  - If it is a document modification, it can be submitted to this branch.
+All development happens directly on `main`. Submit pull requests to `main`.
 
 ## Development Setup
 
 ### Prerequisites
 
-- Node.js ≥22.0.0 (recommended LTS, older versions ≥16.0.0 may work)
-- Rust ≥1.89.0 (recommended stable, older versions ≥1.78.0 may work)
+- Node.js ≥22.0.0 (recommended LTS, older versions ≥18.0.0 may work)
+- Rust ≥1.85.0 (required for edition2024 support in dependencies)
 - Platform-specific build tools:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Windows**: Visual Studio Build Tools with MSVC
@@ -38,8 +27,11 @@ cd Pake
 # Install dependencies
 pnpm install
 
-# Start development
+# Start development (Tauri only)
 pnpm run dev
+
+# Start development (CLI Wrapper + Tauri) - Recommended for CLI changes
+pnpm run cli:dev -- https://web.telegram.org/k/
 ```
 
 ### Testing
@@ -51,6 +43,14 @@ pnpm test
 # Build CLI for testing
 pnpm run cli:build
 ```
+
+### Tips
+
+- Use `--iterative-build` flag during development to skip some hefty checks and use app bundle format for faster debugging:
+
+  ```bash
+  pnpm run cli:dev --iterative-build
+  ```
 
 ## Continuous Integration
 

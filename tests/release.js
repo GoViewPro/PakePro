@@ -62,20 +62,27 @@ class ReleaseBuildTest {
 
     try {
       // Build config
-      this.log("DEBUG", "Configuring app...");
-      execSync("pnpm run build:config", { stdio: "pipe" });
+      this.log("INFO", `\n📦 Building ${appName}...\n`);
 
-      // Build app
+      // Build the app using CLI directly
       this.log("DEBUG", "Building app package...");
+      const commonArgs = `${config.new_window ? "--new-window " : ""}--iterative-build --debug`;
+      const cmd = `node dist/cli.js ${config.url} --name ${config.name} --icon ${config.icon} ${commonArgs}`;
+
       try {
-        execSync("pnpm run build:debug", {
+        execSync(cmd, {
           stdio: "pipe",
-          timeout: 120000, // 2 minutes
+          timeout: 480000, // 8 minutes
           env: { ...process.env, PAKE_CREATE_APP: "1" },
         });
+
+        // Check files immediately after build
+        const outputFiles = this.findOutputFiles(config.name);
+        if (outputFiles.length === 0) {
+          throw new Error("No output files generated");
+        }
       } catch (buildError) {
-        // Ignore build errors, just check if files exist
-        this.log("DEBUG", "Build completed, checking files...");
+        throw new Error(`Build failed: ${buildError.message}`);
       }
 
       // Always return true - release test just needs to verify the process works
@@ -99,17 +106,19 @@ class ReleaseBuildTest {
       `${appName}.AppImage`,
     ];
 
+    // Use Node.js fs instead of Unix find command for cross-platform compatibility
     for (const pattern of directPatterns) {
       try {
-        const result = execSync(
-          `find . -maxdepth 1 -name "${pattern}" 2>/dev/null || true`,
-          { encoding: "utf8" },
-        );
-        if (result.trim()) {
-          files.push(...result.trim().split("\n"));
+        const rootPath = path.join(PROJECT_ROOT);
+        if (fs.existsSync(rootPath)) {
+          const items = fs.readdirSync(rootPath);
+          const matching = items.filter((item) => item === pattern);
+          matching.forEach((item) => {
+            files.push(path.join(rootPath, item));
+          });
         }
       } catch (error) {
-        // Ignore find errors
+        // Ignore errors
       }
     }
 
@@ -127,31 +136,55 @@ class ReleaseBuildTest {
     for (const location of bundleLocations) {
       try {
         if (location.includes("*")) {
-          // Handle wildcard patterns
-          const result = execSync(
-            `find . -path "${location}" -type f 2>/dev/null || true`,
-            { encoding: "utf8" },
-          );
-          if (result.trim()) {
-            files.push(...result.trim().split("\n"));
+          // Handle wildcard patterns using Node.js
+          const dir = path.dirname(location);
+          const pattern = path.basename(location);
+          const fullDir = path.join(PROJECT_ROOT, dir);
+
+          if (fs.existsSync(fullDir)) {
+            const items = fs.readdirSync(fullDir);
+            // Convert glob pattern to regex
+            const regex = new RegExp(
+              "^" + pattern.replace(/\*/g, ".*").replace(/\?/g, ".") + "$",
+            );
+            const matching = items.filter((item) => regex.test(item));
+            matching.forEach((item) => {
+              const fullPath = path.join(fullDir, item);
+              if (fs.statSync(fullPath).isFile() || item.endsWith(".app")) {
+                files.push(fullPath);
+              }
+            });
           }
         } else {
           // Direct path check
-          if (fs.existsSync(location)) {
-            files.push(location);
+          const fullPath = path.join(PROJECT_ROOT, location);
+          if (fs.existsSync(fullPath)) {
+            files.push(fullPath);
           }
         }
       } catch (error) {
-        // Ignore find errors
+        // Ignore errors
       }
     }
 
     return files.filter((f) => f && f.length > 0);
   }
 
-  async run() {
+  async run(options = {}) {
     console.log(`${BLUE}🚀 Release Build Test${NC}`);
     console.log(`${BLUE}===================${NC}`);
+
+    // Build CLI first (unless skipped)
+    if (!options.skipCliBuild) {
+      this.log("INFO", "🔨 Building CLI...");
+      try {
+        execSync(`pnpm run cli:build`, { stdio: "pipe" });
+      } catch (e) {
+        this.log("ERROR", "Failed to build CLI");
+        return false;
+      }
+    }
+
     console.log(`Testing apps: ${TEST_APPS.join(", ")}`);
     console.log("");
 

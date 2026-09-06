@@ -15,7 +15,13 @@ export default class MacBuilder extends BaseBuilder {
       ? options.targets
       : 'auto';
 
-    if (process.env.PAKE_CREATE_APP === '1') {
+    // `app` is a valid macOS bundle target (see merge.ts); honour it explicitly.
+    if (
+      options.targets === 'app' ||
+      options.iterativeBuild ||
+      options.install ||
+      process.env.PAKE_CREATE_APP === '1'
+    ) {
       this.buildFormat = 'app';
     } else {
       this.buildFormat = 'dmg';
@@ -25,7 +31,7 @@ export default class MacBuilder extends BaseBuilder {
   }
 
   getFileName(): string {
-    const { name } = this.options;
+    const { name = 'pake-app' } = this.options;
 
     if (this.buildFormat === 'app') {
       return name;
@@ -42,6 +48,10 @@ export default class MacBuilder extends BaseBuilder {
       arch = this.getArchDisplayName(this.resolveTargetArch(this.buildArch));
     }
     return `${name}_${tauriConfig.version}_${arch}`;
+  }
+
+  getReportArch(): string {
+    return this.getActualArch();
   }
 
   private getActualArch(): string {
@@ -64,18 +74,7 @@ export default class MacBuilder extends BaseBuilder {
       throw new Error(`Unsupported architecture: ${actualArch} for macOS`);
     }
 
-    let fullCommand = this.buildBaseCommand(
-      packageManager,
-      configPath,
-      buildTarget,
-    );
-
-    const features = this.getBuildFeatures();
-    if (features.length > 0) {
-      fullCommand += ` --features ${features.join(',')}`;
-    }
-
-    return fullCommand;
+    return this.buildBaseCommand(packageManager, configPath, buildTarget);
   }
 
   protected getBasePath(): string {
@@ -83,7 +82,11 @@ export default class MacBuilder extends BaseBuilder {
     const actualArch = this.getActualArch();
     const target = this.getTauriTarget(actualArch, 'darwin');
 
-    return `src-tauri/target/${target}/${basePath}/bundle`;
+    if (!target) {
+      throw new Error(`Unsupported architecture: ${actualArch} for macOS`);
+    }
+
+    return path.join(this.getCargoTargetDir(), target, basePath, 'bundle');
   }
 
   protected hasArchSpecificTarget(): boolean {
@@ -93,6 +96,9 @@ export default class MacBuilder extends BaseBuilder {
   protected getArchSpecificPath(): string {
     const actualArch = this.getActualArch();
     const target = this.getTauriTarget(actualArch, 'darwin');
-    return `src-tauri/target/${target}`;
+    if (!target) {
+      throw new Error(`Unsupported architecture: ${actualArch} for macOS`);
+    }
+    return path.join(this.getCargoTargetDir(), target);
   }
 }

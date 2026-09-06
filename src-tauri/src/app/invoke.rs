@@ -1,22 +1,79 @@
-use crate::util::{check_file_or_append, get_download_message_with_lang, show_toast, MessageType};
-use std::fs::{self, File};
+use crate::app::navigation::{history_step, reload_window};
+use crate::util::{
+    check_file_or_append, get_download_message_with_lang, sanitize_download_filename, show_toast,
+    MessageType,
+};
+use std::fs::File;
 use std::io::Write;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicI64, Ordering};
 use tauri::http::Method;
 use tauri::{command, AppHandle, Manager, Url, WebviewWindow};
+use tauri_plugin_http::reqwest::header::{HeaderValue, COOKIE};
 use tauri_plugin_http::reqwest::{ClientBuilder, Request};
+
+use tauri::Theme;
+
+static BADGE_COUNT: AtomicI64 = AtomicI64::new(0);
+const MAX_BADGE_COUNT: i64 = 99_999;
+const MAX_BADGE_LABEL_CHARS: usize = 16;
+
+fn normalize_badge_count(count: Option<i64>) -> Option<i64> {
+    count.filter(|n| (1..=MAX_BADGE_COUNT).contains(n))
+}
+
+fn normalize_badge_label(label: Option<&str>) -> Result<Option<String>, String> {
+    let Some(label) = label.map(str::trim).filter(|label| !label.is_empty()) else {
+        return Ok(None);
+    };
+
+    if label.chars().count() > MAX_BADGE_LABEL_CHARS {
+        return Err(format!(
+            "Badge label must be {MAX_BADGE_LABEL_CHARS} characters or fewer"
+        ));
+    }
+
+    Ok(Some(label.to_string()))
+}
+
+fn apply_badge(app: &AppHandle, count: Option<i64>) -> Result<(), String> {
+    let label = normalize_badge_count(count).map(|n| n.to_string());
+    apply_badge_label(app, label.as_deref())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_badge_label(app: &AppHandle, label: Option<&str>) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::NSString;
+
+    let label = label.map(str::to_owned);
+    app.run_on_main_thread(move || {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let dock_tile = NSApplication::sharedApplication(mtm).dockTile();
+        let ns_label = label.as_deref().map(NSString::from_str);
+        dock_tile.setBadgeLabel(ns_label.as_deref());
+    })
+    .map_err(|e| format!("Failed to dispatch dock badge update: {e}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_badge_label(app: &AppHandle, label: Option<&str>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("pake")
+        .ok_or("Main window not found")?;
+    let count = label.and_then(|s| s.parse::<i64>().ok());
+    window
+        .set_badge_count(count)
+        .map_err(|e| format!("Failed to set badge count: {e}"))
+}
 
 #[derive(serde::Deserialize)]
 pub struct DownloadFileParams {
     url: String,
     filename: String,
-    language: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-pub struct BinaryDownloadParams {
-    filename: String,
-    binary: Vec<u8>,
     language: Option<String>,
 }
 
@@ -27,62 +84,83 @@ pub struct NotificationParams {
     icon: String,
 }
 
-#[command]
-pub async fn download_file(app: AppHandle, params: DownloadFileParams) -> Result<(), String> {
-    let window: WebviewWindow = app.get_webview_window("pake").unwrap();
-    show_toast(
-        &window,
-        &get_download_message_with_lang(MessageType::Start, params.language.clone()),
-    );
-
-    let output_path = app.path().download_dir().unwrap().join(params.filename);
-    let file_path = check_file_or_append(output_path.to_str().unwrap());
-    let client = ClientBuilder::new().build().unwrap();
-
-    let response = client
-        .execute(Request::new(
-            Method::GET,
-            Url::from_str(&params.url).unwrap(),
-        ))
-        .await;
-
-    match response {
-        Ok(res) => {
-            let bytes = res.bytes().await.unwrap();
-
-            let mut file = File::create(file_path).unwrap();
-            file.write_all(&bytes).unwrap();
-            show_toast(
-                &window,
-                &get_download_message_with_lang(MessageType::Success, params.language.clone()),
-            );
-            Ok(())
-        }
-        Err(e) => {
-            show_toast(
-                &window,
-                &get_download_message_with_lang(MessageType::Failure, params.language),
-            );
-            Err(e.to_string())
-        }
+/// Build a Cookie header from the webview session so authenticated downloads
+/// match what the page itself would request. Best-effort: missing cookies
+/// fall through to an anonymous request.
+fn cookie_header_for_url(window: &WebviewWindow, url: &Url) -> Option<HeaderValue> {
+    let cookies = window.cookies_for_url(url.clone()).ok()?;
+    if cookies.is_empty() {
+        return None;
     }
+    let header = cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    HeaderValue::from_str(&header).ok()
 }
 
 #[command]
-pub async fn download_file_by_binary(
+pub async fn download_file(
+    window: WebviewWindow,
     app: AppHandle,
-    params: BinaryDownloadParams,
+    params: DownloadFileParams,
 ) -> Result<(), String> {
-    let window: WebviewWindow = app.get_webview_window("pake").unwrap();
+    // Toast on the calling window (secondary windows included), not a hard-coded
+    // main-window label. Tauri injects the invoker as `window`.
     show_toast(
         &window,
         &get_download_message_with_lang(MessageType::Start, params.language.clone()),
     );
-    let output_path = app.path().download_dir().unwrap().join(params.filename);
-    let file_path = check_file_or_append(output_path.to_str().unwrap());
-    let download_file_result = fs::write(file_path, &params.binary);
-    match download_file_result {
-        Ok(_) => {
+
+    let download_dir = app
+        .path()
+        .download_dir()
+        .map_err(|e| format!("Failed to get download dir: {}", e))?;
+
+    let output_path = download_dir.join(sanitize_download_filename(&params.filename));
+
+    let path_str = output_path.to_str().ok_or("Invalid output path")?;
+
+    let file_path = check_file_or_append(path_str);
+
+    let client = ClientBuilder::new()
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
+    let url = Url::from_str(&params.url).map_err(|e| format!("Invalid URL: {}", e))?;
+
+    let mut request = Request::new(Method::GET, url.clone());
+    if let Some(cookie_header) = cookie_header_for_url(&window, &url) {
+        request.headers_mut().insert(COOKIE, cookie_header);
+    }
+
+    let response = client.execute(request).await;
+
+    match response {
+        Ok(mut res) => {
+            // Transport success is not download success: 403/404 HTML error pages
+            // must not be written as files or toasted as successful downloads.
+            if !res.status().is_success() {
+                show_toast(
+                    &window,
+                    &get_download_message_with_lang(MessageType::Failure, params.language),
+                );
+                return Err(format!("Download failed with HTTP status {}", res.status()));
+            }
+
+            let mut file =
+                File::create(&file_path).map_err(|e| format!("Failed to create file: {}", e))?;
+
+            while let Some(chunk) = res
+                .chunk()
+                .await
+                .map_err(|e| format!("Failed to get chunk: {}", e))?
+            {
+                file.write_all(&chunk)
+                    .map_err(|e| format!("Failed to write chunk: {}", e))?;
+            }
+
             show_toast(
                 &window,
                 &get_download_message_with_lang(MessageType::Success, params.language.clone()),
@@ -108,44 +186,82 @@ pub fn send_notification(app: AppHandle, params: NotificationParams) -> Result<(
         .body(&params.body)
         .icon(&params.icon)
         .show()
-        .unwrap();
+        .map_err(|e| format!("Failed to show notification: {}", e))?;
     Ok(())
 }
 
-use crate::util::get_pake_config;
+#[command]
+pub fn set_dock_badge(app: AppHandle, count: Option<i64>) -> Result<(), String> {
+    let normalized = normalize_badge_count(count);
+    BADGE_COUNT.store(normalized.unwrap_or(0), Ordering::SeqCst);
+    apply_badge(&app, normalized)
+}
 
 #[command]
-pub async fn window_run_label(app: AppHandle, label: String, url: String) {
-    // 创建一个新窗口
-    let (pake_config, _tauri_config) = get_pake_config();
-    let user_agent = pake_config.user_agent.get();
-    let window_config = pake_config
-        .windows
-        .first()
-        .expect("At least one window configuration is required");
+pub fn increment_dock_badge(app: AppHandle) -> Result<(), String> {
+    let current = BADGE_COUNT.load(Ordering::SeqCst);
+    let next = current.saturating_add(1).clamp(1, MAX_BADGE_COUNT);
+    BADGE_COUNT.store(next, Ordering::SeqCst);
+    apply_badge(&app, Some(next))
+}
 
-    let config_script = format!(
-        "window.pakeConfig = {}",
-        serde_json::to_string(&window_config).unwrap()
-    );
+#[command]
+pub fn clear_dock_badge(app: AppHandle) -> Result<(), String> {
+    BADGE_COUNT.store(0, Ordering::SeqCst);
+    apply_badge(&app, None)
+}
 
-    let _window = tauri::WebviewWindowBuilder::new(
-        &app,
-        label.clone(),
-        tauri::WebviewUrl::App(url.parse().unwrap()),
-    )
-    .title("GoViewPro")
-    .user_agent(user_agent)
-    .resizable(window_config.resizable)
-    .fullscreen(window_config.fullscreen)
-    .inner_size(window_config.width, window_config.height)
-    .always_on_top(window_config.always_on_top)
-    .disable_drag_drop_handler()
-    .initialization_script(&config_script)
-    .initialization_script(include_str!("../inject/component.js"))
-    .initialization_script(include_str!("../inject/event.js"))
-    .initialization_script(include_str!("../inject/style.js"))
-    .initialization_script(include_str!("../inject/custom.js"))
-    .build()
-    .expect("Failed to create new window");
+#[command]
+pub fn set_dock_badge_label(app: AppHandle, label: Option<String>) -> Result<(), String> {
+    BADGE_COUNT.store(0, Ordering::SeqCst);
+    let label = normalize_badge_label(label.as_deref())?;
+    apply_badge_label(&app, label.as_deref())
+}
+
+#[command]
+pub async fn update_theme_mode(app: AppHandle, mode: String) {
+    let theme = if mode == "dark" {
+        Theme::Dark
+    } else {
+        Theme::Light
+    };
+    for window in app.webview_windows().values() {
+        let _ = window.set_theme(Some(theme));
+    }
+}
+
+// Apply native WebView zoom (WKWebView pageZoom / WebView2 ZoomFactor / WebKitGTK
+// zoom level) instead of CSS hacks. CSS `transform: scale` and `html.style.zoom`
+// break complex SPAs like ChatGPT (fixed positioning shifts, unrepainted layers);
+// native zoom recalculates layout the same way a browser does for Cmd/Ctrl +/-.
+#[command]
+pub fn set_zoom(window: WebviewWindow, percent: f64) -> Result<(), String> {
+    let factor = (percent / 100.0).clamp(0.3, 2.0);
+    window
+        .set_zoom(factor)
+        .map_err(|e| format!("Failed to set zoom: {}", e))
+}
+
+/// Native navigation for injected shortcuts (Linux/Windows Ctrl+R / [ / ]).
+/// Blank error pages have no JS context, so page `history` / `location` calls
+/// are no-ops; these use the platform webview API instead.
+#[command]
+pub fn webview_navigate(window: WebviewWindow, action: String) -> Result<(), String> {
+    match action.as_str() {
+        "reload" => {
+            reload_window(&window);
+            Ok(())
+        }
+        "back" => {
+            history_step(&window, true);
+            Ok(())
+        }
+        "forward" => {
+            history_step(&window, false);
+            Ok(())
+        }
+        other => Err(format!(
+            "Unknown webview_navigate action '{other}' (expected reload|back|forward)"
+        )),
+    }
 }

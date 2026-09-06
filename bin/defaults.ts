@@ -1,4 +1,5 @@
 import { PakeCliOptions } from './types.js';
+import { getDefaultLinuxTargets } from './utils/platform.js';
 
 export const DEFAULT_PAKE_OPTIONS: PakeCliOptions = {
   icon: '',
@@ -8,6 +9,7 @@ export const DEFAULT_PAKE_OPTIONS: PakeCliOptions = {
   maximize: false,
   resizable: true,
   hideTitleBar: false,
+  hideWindowDecorations: false,
   alwaysOnTop: false,
   appVersion: '1.0.0',
   darkMode: false,
@@ -16,21 +18,48 @@ export const DEFAULT_PAKE_OPTIONS: PakeCliOptions = {
   userAgent: '',
   showSystemTray: false,
   multiArch: false,
-  targets: 'deb',
+  targets: (() => {
+    switch (process.platform) {
+      case 'linux':
+        return getDefaultLinuxTargets();
+      case 'darwin':
+        return 'dmg';
+      case 'win32':
+        return 'msi';
+      default:
+        return 'deb';
+    }
+  })(),
   useLocalFile: false,
   systemTrayIcon: '',
   proxyUrl: '',
+  basicAuth: false,
   debug: false,
+  json: false,
   inject: [],
   installerLanguage: 'en-US',
   hideOnClose: false, // Platform-specific: true for macOS, false for others
   incognito: false,
   wasm: false,
   enableDragDrop: false,
+  bundle: true,
   keepBinary: false,
   multiInstance: false,
+  multiWindow: true,
   startToTray: false,
   forceInternalNavigation: false,
+  internalUrlRegex: '',
+  safeDomain: '',
+  enableFind: false,
+  iterativeBuild: false,
+  zoom: 100,
+  minWidth: 0,
+  minHeight: 0,
+  ignoreCertificateErrors: false,
+  newWindow: true,
+  install: false,
+  camera: false,
+  microphone: false,
 };
 
 // Just for cli development
